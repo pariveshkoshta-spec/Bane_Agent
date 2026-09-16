@@ -4,10 +4,12 @@ import os
 import typer
 import requests
 import sqlite3
+import time
 from typing import Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.syntax import Syntax
 
 app = typer.Typer(
     help="Bane: Execution-Aligned Text-to-SQL Agent CLI",
@@ -59,7 +61,8 @@ def init(
 @app.command()
 def query(
     question: str = typer.Argument(..., help="The natural language question to ask"),
-    db_path: str = typer.Option(..., "--db", "-d", help="Path to SQLite database to execute against")
+    db_path: str = typer.Option(..., "--db", "-d", help="Path to SQLite database to execute against"),
+    sql_only: bool = typer.Option(False, "--sql-only", "-s", help="Print only the generated SQL query without executing")
 ):
     """
     Retrieves schemas via FAISS, generates aligned SQL, and executes it with formatted output.
@@ -68,9 +71,11 @@ def query(
         console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found.")
         raise typer.Exit(code=1)
 
-    console.print(f"\n[bold blue]🔍 User Question:[/bold blue] [italic]{question}[/italic]")
+    if not sql_only:
+        console.print(f"\n[bold blue]🔍 User Question:[/bold blue] [italic]{question}[/italic]")
 
     try:
+        start_time = time.time()
         response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
         
         if response.status_code != 200:
@@ -80,17 +85,23 @@ def query(
         data = response.json()
         sql = data.get("sql", "").strip()
 
-        console.print(Panel(f"[bold green]{sql}[/bold green]", title="[bold]Generated SQL[/bold]", border_style="green"))
+        # If user only wanted the raw SQL for scripts/copying
+        if sql_only:
+            console.print(sql)
+            return
 
         # Execute against local SQLite database
         try:
+            exec_start = time.time()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             cursor.execute(sql)
             results = cursor.fetchall()
             headers = [desc[0] for desc in cursor.description] if cursor.description else []
             conn.close()
+            exec_duration = (time.time() - exec_start) * 1000
 
+            # 1. Display Execution Results Table
             if results:
                 table = Table(title="Execution Results", show_lines=True, header_style="bold magenta")
                 for col in headers:
@@ -100,12 +111,32 @@ def query(
                     table.add_row(*[str(val) for val in row])
 
                 console.print(table)
-                console.print(f"[dim]Returned {len(results)} rows.[/dim]\n")
+                console.print(f"[dim]Returned {len(results)} rows in {exec_duration:.1f}ms.[/dim]\n")
             else:
                 console.print("[yellow]Query executed successfully, but returned 0 rows.[/yellow]\n")
 
+            # 2. Prominently display the exact SQL used to produce the above results
+            sql_syntax = Syntax(sql, "sql", theme="monokai", line_numbers=False)
+            console.print(
+                Panel(
+                    sql_syntax,
+                    title="[bold green]📌 Query used to produce the above results[/bold green]",
+                    subtitle="[dim]Verified by Execution Sandbox[/dim]",
+                    border_style="bright_blue",
+                    padding=(1, 2)
+                )
+            )
+
         except Exception as e:
-            console.print(f"[bold red]Execution Sandbox Error:[/bold red] {e}\n")
+            console.print(f"[bold red]Execution Sandbox Error:[/bold red] {e}")
+            sql_syntax = Syntax(sql, "sql", theme="monokai")
+            console.print(
+                Panel(
+                    sql_syntax,
+                    title="[bold red]Attempted SQL Query[/bold red]",
+                    border_style="red"
+                )
+            )
 
     except requests.exceptions.ConnectionError:
         console.print(f"[bold red]Error:[/bold red] Could not reach Bane API at '{API_URL}'.")
