@@ -540,7 +540,12 @@ async def generate_sql(request: QueryRequest):
         sql = engine.generate_sql(request.question, schema_context)
 
         # 4. Dry-run execution & Diagnostic Self-Healing Loop
-        target_db = request.db_path or current_db_path
+        target_db = None
+        if request.db_path and os.path.exists(request.db_path):
+            target_db = request.db_path
+        elif current_db_path and os.path.exists(current_db_path):
+            target_db = current_db_path
+
         is_repaired = False
         diagnostic_hint = None
 
@@ -588,4 +593,32 @@ async def generate_sql(request: QueryRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class RepairRequest(BaseModel):
+    question: str
+    failed_sql: str
+    error_msg: str
+
+@app.post("/repair_sql")
+async def repair_sql_endpoint(request: RepairRequest):
+    """
+    Direct endpoint for client-side self-healing requests.
+    """
+    global diagnostic_engine, introspected_schemas, full_schema_context
+    if diagnostic_engine is None and introspected_schemas:
+        diagnostic_engine = DiagnosticEngine(introspected_schemas)
+
+    diagnostic_hint = diagnostic_engine.diagnose_error(request.error_msg, request.failed_sql) if diagnostic_engine else "Review schema."
+    repair_context = full_schema_context or ""
+    repaired_sql = engine.repair_sql(
+        question=request.question,
+        failed_sql=request.failed_sql,
+        error_msg=request.error_msg,
+        diagnostic_hint=diagnostic_hint,
+        schema_context=repair_context
+    )
+    return {
+        "repaired_sql": repaired_sql,
+        "diagnostic_hint": diagnostic_hint
+    }
 

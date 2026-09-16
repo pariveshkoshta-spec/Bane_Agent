@@ -102,17 +102,11 @@ def query(
             console.print(sql)
             return
 
-        if self_healed and diagnostic:
-            console.print(
-                Panel(
-                    f"[bold yellow]Compiler Diagnostic Guidance:[/bold yellow]\n{diagnostic}",
-                    title="[bold yellow]🛠️ Query Auto-Repaired by Bane Diagnostic Loop[/bold yellow]",
-                    border_style="yellow",
-                    padding=(0, 1)
-                )
-            )
-
         # Execute against local SQLite database
+        results = None
+        headers = []
+        exec_duration = 0
+
         try:
             exec_start = time.time()
             conn = sqlite3.connect(db_path)
@@ -122,6 +116,47 @@ def query(
             headers = [desc[0] for desc in cursor.description] if cursor.description else []
             conn.close()
             exec_duration = (time.time() - exec_start) * 1000
+        except Exception as local_err:
+            # Trigger client-side self-healing fallback via API
+            try:
+                console.print(f"[dim]⚡ Local execution notice: '{local_err}'. Running Diagnostic Self-Healing...[/dim]")
+                repair_resp = requests.post(
+                    f"{API_URL}/repair_sql",
+                    json={
+                        "question": question,
+                        "failed_sql": sql,
+                        "error_msg": str(local_err)
+                    },
+                    timeout=30
+                )
+                if repair_resp.status_code == 200:
+                    repair_data = repair_resp.json()
+                    repaired_sql = repair_data.get("repaired_sql", "").strip()
+                    diagnostic = repair_data.get("diagnostic_hint")
+                    if repaired_sql and repaired_sql != sql:
+                        exec_start = time.time()
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute(repaired_sql)
+                        results = cursor.fetchall()
+                        headers = [desc[0] for desc in cursor.description] if cursor.description else []
+                        conn.close()
+                        exec_duration = (time.time() - exec_start) * 1000
+                        sql = repaired_sql
+                        self_healed = True
+            except Exception:
+                pass
+
+        if results is not None:
+            if self_healed and diagnostic:
+                console.print(
+                    Panel(
+                        f"[bold yellow]Compiler Diagnostic Guidance:[/bold yellow]\n{diagnostic}",
+                        title="[bold yellow]🛠️ Query Auto-Repaired by Bane Diagnostic Loop[/bold yellow]",
+                        border_style="yellow",
+                        padding=(0, 1)
+                    )
+                )
 
             # 1. Display Execution Results Table
             if results:
@@ -152,8 +187,8 @@ def query(
                 )
             )
 
-        except Exception as e:
-            console.print(f"[bold red]Execution Sandbox Error:[/bold red] {e}")
+        else:
+            console.print(f"[bold red]Execution Sandbox Error:[/bold red] Local execution could not execute the query.")
             sql_syntax = Syntax(sql, "sql", theme="monokai")
             console.print(
                 Panel(
