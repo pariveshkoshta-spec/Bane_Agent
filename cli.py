@@ -1,70 +1,115 @@
+import warnings
+warnings.filterwarnings("ignore")
+import os
 import typer
 import requests
 import sqlite3
+from typing import Optional
 from rich.console import Console
 from rich.table import Table
+from rich.panel import Panel
 
-app = typer.Typer(help="Bane: Execution-Aligned Text-to-SQL CLI")
+app = typer.Typer(
+    help="Bane: Execution-Aligned Text-to-SQL Agent CLI",
+    add_completion=False
+)
 console = Console()
 
-# Assume API is running locally for now
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("BANE_API_URL", "http://localhost:8000")
 
 @app.command()
-def init(db_path: str = typer.Argument(..., help="Path to your SQLite database")):
+def init(
+    db_path: str = typer.Argument(..., help="Path to your SQLite database file"),
+    rules: Optional[str] = typer.Option(None, "--rules", "-r", help="Optional human business logic string or rules file path")
+):
     """
-    Introspects your database and builds the FAISS semantic index.
+    Introspects your database, enriches business logic, and builds the FAISS vector index.
     """
-    console.print(f"[bold blue]Initializing Bane Agent on:[/bold blue] {db_path}")
-    
-    response = requests.post(f"{API_URL}/init", json={"db_path": db_path})
-    
-    if response.status_code == 200:
-        console.print(f"[bold green]Success:[/bold green] {response.json()['message']}")
-    else:
-        console.print(f"[bold red]Error:[/bold red] {response.text}")
+    if not os.path.exists(db_path):
+        console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' does not exist.")
+        raise typer.Exit(code=1)
+
+    business_rules_text = None
+    if rules:
+        if os.path.exists(rules):
+            with open(rules, "r") as f:
+                business_rules_text = f.read()
+        else:
+            business_rules_text = rules
+
+    console.print(f"\n[bold blue]⚡ Introspecting Database:[/bold blue] {os.path.abspath(db_path)}")
+    try:
+        payload = {"db_path": os.path.abspath(db_path)}
+        if business_rules_text:
+            payload["business_rules"] = business_rules_text
+
+        response = requests.post(f"{API_URL}/init", json=payload, timeout=30)
+
+        if response.status_code == 200:
+            data = response.json()
+            console.print(f"[bold green]✔ Success:[/bold green] {data.get('message')}")
+            if "tables" in data:
+                console.print(f"[cyan]Indexed Tables:[/cyan] {', '.join(data['tables'])}")
+        else:
+            console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {response.text}")
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Error:[/bold red] Could not connect to Bane API at '{API_URL}'.")
+        console.print("[dim]Make sure the API server is running with: uvicorn src.api:app --reload[/dim]")
 
 @app.command()
 def query(
     question: str = typer.Argument(..., help="The natural language question to ask"),
-    db_path: str = typer.Option(..., "--db", help="Path to your SQLite database to execute the query")
+    db_path: str = typer.Option(..., "--db", "-d", help="Path to SQLite database to execute against")
 ):
     """
-    Generates and executes SQL based on your question.
+    Retrieves schemas via FAISS, generates aligned SQL, and executes it with formatted output.
     """
-    console.print(f"[bold blue]Asking Bane:[/bold blue] '{question}'\n")
-    
-    response = requests.post(f"{API_URL}/generate_sql", json={"question": question})
-    
-    if response.status_code == 200:
-        sql = response.json()["sql"]
-        console.print(f"[bold green]Generated SQL:[/bold green]\n{sql}\n")
+    if not os.path.exists(db_path):
+        console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found.")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold blue]🔍 User Question:[/bold blue] [italic]{question}[/italic]")
+
+    try:
+        response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
         
-        # Execute the returned SQL locally
+        if response.status_code != 200:
+            console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {response.text}")
+            return
+
+        data = response.json()
+        sql = data.get("sql", "").strip()
+
+        console.print(Panel(f"[bold green]{sql}[/bold green]", title="[bold]Generated SQL[/bold]", border_style="green"))
+
+        # Execute against local SQLite database
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            results = cursor.execute(sql).fetchall()
-            
-            # Print results beautifully
-            if results:
-                table = Table(title="Execution Results", show_lines=True)
-                # Just add columns dynamically based on result width
-                for _ in range(len(results[0])):
-                    table.add_column()
-                
-                for row in results:
-                    table.add_row(*[str(item) for item in row])
-                console.print(table)
-            else:
-                console.print("[yellow]Query executed successfully, but returned 0 rows.[/yellow]")
-                
+            cursor.execute(sql)
+            results = cursor.fetchall()
+            headers = [desc[0] for desc in cursor.description] if cursor.description else []
             conn.close()
+
+            if results:
+                table = Table(title="Execution Results", show_lines=True, header_style="bold magenta")
+                for col in headers:
+                    table.add_column(col, style="bold cyan")
+
+                for row in results:
+                    table.add_row(*[str(val) for val in row])
+
+                console.print(table)
+                console.print(f"[dim]Returned {len(results)} rows.[/dim]\n")
+            else:
+                console.print("[yellow]Query executed successfully, but returned 0 rows.[/yellow]\n")
+
         except Exception as e:
-            console.print(f"[bold red]Execution Error:[/bold red] {str(e)}")
-            
-    else:
-        console.print(f"[bold red]API Error:[/bold red] {response.text}")
+            console.print(f"[bold red]Execution Sandbox Error:[/bold red] {e}\n")
+
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Error:[/bold red] Could not reach Bane API at '{API_URL}'.")
+        console.print("[dim]Start the API with: uvicorn src.api:app --reload[/dim]")
 
 if __name__ == "__main__":
     app()

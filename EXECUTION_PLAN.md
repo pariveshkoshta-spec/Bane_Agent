@@ -130,6 +130,16 @@ We build the `bane-cli` tool that the end-user actually interacts with on their 
 *   **Action:** Install the package on your local Mac.
 *   **Execution:** Open your terminal and run `pip install -e .` (This installs the CLI in editable mode).
 *   **The Final Test:** 
-    1. Type `bane init test_db.sqlite`
-    2. Type `bane query "Show me the top 5 highest paying customers"`
-    3. Watch as your terminal instantly prints the generated SQL and the ASCII data table. The project is complete!
+    ```bash
+    bane init test_db.sqlite
+    bane query "Show me the top 5 highest paying customers"
+    ```
+    Watch as your terminal prints the generated SQL and the ASCII data table. The core project is complete!
+
+---
+
+## Phase 6: Enterprise Hardening with Real-World Messy Schemas
+To graduate this agent into full industry production ready for non-trivial company databases:
+1. **Unstructured & Cryptic Schemas:** Test on real-world industry benchmarks with cryptic column names (`cust_cd`, `acct_stat_flg`, `tx_amt_usd`), missing foreign key declarations, and denormalized tables (e.g., BIRD-SQL financial/healthcare subsets).
+2. **Semantic Knowledge Base:** Expand `business_rules.yaml` into an organization-wide data dictionary where non-technical stakeholders map internal jargon into SQL constraints without touching the core model.
+

@@ -1,0 +1,18 @@
+# Enterprise Domain Knowledge & Business Logic
+# The Semantic Enrichment Agent translates these unstructured human definitions into SQL constraints
+
+company_domain_rules:
+  - metric: "high_value_enterprise_customer"
+    definition: "A customer whose tier is 'ENTERPRISE' and who has delivered orders exceeding $10,000 USD."
+    tables_involved: ["tbl_customers", "tbl_orders"]
+    sql_filter: "tbl_customers.tier = 'ENTERPRISE' AND tbl_orders.order_amount_usd > 10000 AND tbl_orders.fulfillment_status = 'DELIVERED'"
+
+  - metric: "churned_account"
+    definition: "An account where the subscription has is_cancelled = 1 in tbl_subscriptions."
+    tables_involved: ["tbl_subscriptions"]
+    sql_filter: "tbl_subscriptions.is_cancelled = 1"
+
+  - metric: "critical_unresolved_ticket"
+    definition: "Support tickets with priority 'P1_CRITICAL' and resolved_flag = 0."
+    tables_involved: ["tbl_support_tickets"]
+    sql_filter: "tbl_support_tickets.priority_lvl = 'P1_CRITICAL' AND tbl_support_tickets.resolved_flag = 0"

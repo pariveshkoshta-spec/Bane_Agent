@@ -1,6 +1,12 @@
+def format_dpo_prompt(question: str, schema: str) -> str:
+    """
+    Constructs the prompt exactly as our DPO-aligned LLaMA-3 model was trained.
+    """
+    return f"### Schema:\n{schema}\n\n### Question:\n{question}\n\n### SQL:\n"
+
 def format_sqlcoder_prompt(question: str, schema_metadata: str) -> str:
     """
-    Constructs the prompt exactly as SQLCoder expects, injecting the schema.
+    Constructs the prompt as SQLCoder expects, injecting the schema.
     """
     prompt_template = """### Task
 Generate a SQL query to answer [QUESTION]{user_question}[/QUESTION]
