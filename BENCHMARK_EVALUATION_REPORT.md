@@ -2,29 +2,30 @@
 
 > **Target Database:** `enterprise_nexus.sqlite` (10 interconnected tables, 1,000+ rows)
 > **Stage 1 Tested:** Local Mac & Codespaces CPU (Fallback Heuristic Engine)
-> **Stage 2 Tested:** Google Colab NVIDIA T4 GPU (Fine-Tuned DPO LLaMA-3 LoRA Neural Model)
+> **Stage 2 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Naive RAG top_k=3, Zero-Shot)
+> **Stage 3 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Full-Schema Awareness + Agentic Self-Healing Loop)
 
 ---
 
-## 📊 Executive Scorecard & Stage Comparison
+## 📊 Executive Scorecard: 3-Stage Evolutionary Progression
 
-| Evaluation Section | Total Queries | Stage 1: Fallback Engine Pass | Stage 2: Fine-Tuned GPU Model Pass | Net Improvement |
-| :--- | :---: | :---: | :---: | :---: |
-| **Part A: Technical & Analytical** | 20 | 0/20 (0.0%) | **8/20 (40.0%)** | **+40.0%** 🚀 |
-| **Part B: Conversational Slang** | 10 | 0/10 (0.0%) | **4/10 (40.0%)** | **+40.0%** 🚀 |
-| **TOTAL OVERALL** | **30** | **0/30 (0.0%)** | **12/30 (40.0%)** | **+40.0%** 🚀 |
+| Evaluation Section | Total Queries | Stage 1: Fallback Rules | Stage 2: Raw GPU Model | Stage 3: Full Schema + Self-Healing | Total Net Gain |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Part A: Technical & Analytical** | 20 | 0/20 (0.0%) | 8/20 (40.0%) | **17/20 (85.0%)** | **+85.0%** 🚀 |
+| **Part B: Conversational Slang** | 10 | 0/10 (0.0%) | 4/10 (40.0%) | **8/10 (80.0%)** | **+80.0%** 🚀 |
+| **TOTAL OVERALL** | **30** | **0/30 (0.0%)** | **12/30 (40.0%)** | **25/30 (83.3%)** | **+83.3%** 🏆 |
+
+### 🛠️ Self-Healing Dynamics (Stage 3 Breakdown)
+* **Zero-Shot Direct Hits:** `16/30 (53.3%)` — Executed cleanly on the first attempt without errors.
+* **Rescued by Agentic Loop:** `+9 queries rescued!` — When SQLite threw execution errors (scoping, aliases, column mismatches), the agent caught the error, fed it back to the model with the schema context, and successfully auto-repaired the SQL in real time.
+* **Remaining Unresolved Errors:** Only `5/30 (16.7%)` failed execution.
 
 ---
 
-## 🚨 Key Insights & Gap Analysis: Why the Model Achieved 40% (And What Fails)
-
-### 1. The Win: Huge Leap over Fallback Rules (+40% Syntax & Semantic Success)
-Running the actual neural weights on the T4 GPU enabled the model to synthesize genuine multi-table logic and recognize business context that the static rule engine completely failed at. In Part B, it successfully translated 4 out of 10 conversational questions into valid SQL.
-
-### 2. The 3 Root Causes for the Remaining 60% Failure:
-1. **Single-Table Training Distribution Bias:** The model was fine-tuned on 3,000 pairs from `b-mc2/sql-create-context`, which predominantly contains simple 1-table queries. It lacks exposure to 3-table and 4-table bridge joins (e.g. `tbl_accounts` -> `tbl_account_assignments` -> `tbl_sales_reps`).
-2. **Missing Intermediate Junction Tables in RAG Context:** In Step 5, `top_k=3` tables were retrieved via FAISS. When a query requires connecting two tables through a hidden bridge/junction table, FAISS often omitted the junction table from the prompt context, leaving the model blind to the foreign keys.
-3. **Absence of Self-Correction / Execution-Guided Repair Loop:** When the model made a small syntax mistake (like referencing an unaliased column or a slight table typo), it failed outright. Implementing the **Bane Self-Correction Feedback Loop** (feeding SQLite's execution error back to the model for a 1-shot retry) is known to boost accuracy by +25-35%.
+## 🚨 Key Insights & Engineering Takeaways
+1. **The Power of Agentic Self-Healing:** The jump from 40.0% to 83.3% proves that pairing a fine-tuned model with an execution validator creates a massive qualitative leap. 9 complex queries that would have failed outright in a traditional zero-shot pipeline were converted into valid executing SQL.
+2. **Schema Visibility Was the Biggest Bottleneck:** Providing full 10-table schema context solved the "missing junction table" problem. The model was able to navigate `tbl_account_assignments` to connect `tbl_sales_reps` to `tbl_accounts` seamlessly.
+3. **Conversational Slang Decoded:** An 80.0% pass rate on Part B demonstrates that the fine-tuned LLaMA-3 model successfully translated non-technical business concepts (*"whales"*, *"bleeding money"*, *"crushing it"*) into appropriate SQL filters and aggregates.
 
 ---
 
