@@ -6,5 +6,6 @@ __pycache__/
 *.sqlite
 !enterprise_nexus.sqlite
 *.egg-info/
+*.zip
 
 
