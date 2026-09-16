@@ -50,12 +50,13 @@ class ModelEngine:
         if self.is_loaded:
             return True, "Model already loaded."
 
-        if not os.path.exists(self.adapter_path):
+        if not os.path.exists(os.path.join(self.adapter_path, "adapter_config.json")):
             repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             candidates = [
                 "/content/local_adapters",
                 "/content/bane_dpo_lora_adapters",
                 os.path.join(repo_root, "results", "bane_dpo_lora_adapters"),
+                os.path.join(repo_root, "results", "bane_dpo_lora_adapters", "results", "bane_dpo_lora_adapters"),
                 "/content/drive/MyDrive/bane_dpo_lora_adapters",
                 os.path.join(repo_root, "bane_dpo_lora_adapters")
             ]
@@ -64,8 +65,17 @@ class ModelEngine:
                     self.adapter_path = cand
                     break
 
-        if not os.path.exists(self.adapter_path):
-            self.load_error = f"Adapter directory not found at {self.adapter_path}"
+            if not os.path.exists(os.path.join(self.adapter_path, "adapter_config.json")):
+                import glob
+                matches = glob.glob(os.path.join(repo_root, "**/adapter_config.json"), recursive=True)
+                if not matches:
+                    matches = glob.glob("/content/**/adapter_config.json", recursive=True)
+                if matches:
+                    self.adapter_path = os.path.dirname(matches[0])
+                    print(f"[INFO] Discovered adapter_config.json via glob at: {self.adapter_path}")
+
+        if not os.path.exists(os.path.join(self.adapter_path, "adapter_config.json")):
+            self.load_error = f"Can't find 'adapter_config.json' in '{self.adapter_path}' or any candidate folder."
             print(f"[WARN] {self.load_error}")
             return False, self.load_error
 
@@ -365,6 +375,25 @@ class QueryRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
+    global db_initialized, introspected_schemas, current_db_path, diagnostic_engine, full_schema_context
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_db = os.path.join(repo_root, "enterprise_nexus.sqlite")
+    if not os.path.exists(target_db):
+        target_db = "/content/Bane_Agent/enterprise_nexus.sqlite"
+
+    if os.path.exists(target_db):
+        try:
+            introspector = DatabaseIntrospector(target_db)
+            introspected_schemas = introspector.extract_schemas()
+            retriever.build_index(introspected_schemas)
+            current_db_path = target_db
+            diagnostic_engine = DiagnosticEngine(introspected_schemas)
+            full_schema_context = "\n\n".join(introspected_schemas.values())
+            db_initialized = True
+            print(f"[INFO] Auto-initialized {len(introspected_schemas)} tables on startup.")
+        except Exception as e:
+            print(f"[WARN] Auto-init failed on startup: {e}")
+
     try:
         import torch
         if torch.cuda.is_available() or os.environ.get("BANE_AUTO_LOAD_MODEL") == "1":
