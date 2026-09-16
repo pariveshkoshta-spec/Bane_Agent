@@ -40,6 +40,12 @@ def run_self_healing_benchmark():
             adapter_path = cand
             break
 
+    if not adapter_path:
+        import glob
+        matches = glob.glob("/content/**/adapter_config.json", recursive=True)
+        if matches:
+            adapter_path = os.path.dirname(matches[0])
+
     print(f"[INFO] Using LoRA Adapters: {adapter_path}")
 
     # 2. Load Model
