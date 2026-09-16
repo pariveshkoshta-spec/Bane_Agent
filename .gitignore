@@ -1,11 +1,46 @@
-results/
+# Python bytecode & cache
 __pycache__/
-*.pyc
-.DS_Store
-.venv/
-*.sqlite
-!enterprise_nexus.sqlite
+*.py[cod]
+*$py.class
 *.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Mac / OS junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Databases & local logs (preserve canonical enterprise_nexus.sqlite)
+*.sqlite
+*.sqlite3
+*.db
+!enterprise_nexus.sqlite
+*.log
+tunnel.log
+scripts/part_b_results.json
+
+# Large artifacts, model weights, & training outputs
+results/
 *.zip
+*.tar.gz
+*.pt
+*.bin
+*.safetensors
+*.gguf
+
+# Notebook checkpoints
+.ipynb_checkpoints/
 
 

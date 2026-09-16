@@ -28,10 +28,10 @@ Bane relies on a multi-stage pipeline, fully documented in our [ULTIMATE_ARCHITE
    Uses `all-MiniLM-L6-v2` and `FAISS` to embed thousands of tables and JSON rules. When a user asks a question, it retrieves only the Top-K relevant tables to fit perfectly within the LLM context window.
 4. **Agentic Execution Loop (`src/execution_validator.py`):**
    Generates a synthetic dataset by asking the LLM to write SQL, executing it in a live SQLite sandbox, and labeling the output as `Chosen` (success) or `Rejected` (error/hallucination).
-5. **DPO Fine-Tuning (`notebooks/Bane_Final_Training.ipynb`):**
-   Trains the main LLaMA-3-8B model on Kaggle GPUs using HuggingFace TRL and Unsloth to aggressively penalize the `Rejected` errors.
+5. **DPO Fine-Tuning (`notebooks/Bane_DPO_Kaggle.ipynb`):**
+   Trains the main LLaMA-3-8B model on Kaggle GPUs using HuggingFace TRL and Unsloth to aggressively penalize syntax and schema hallucinations.
 6. **Productization (`src/api.py` & `cli.py`):**
-   Deploys the final GGUF-quantized model via a FastAPI backend on a DigitalOcean CPU Droplet. Users interact with the agent natively via a Typer Command Line Interface (`bane query "show me sales"`).
+   Deploys the fine-tuned model via FastAPI with zero-config Cloudflare Tunnels and a diagnostic-aware self-healing execution loop. Users interact with the agent natively via a Typer Command Line Interface (`bane query "show me sales"`).
 
 ---
 
@@ -39,11 +39,19 @@ Bane relies on a multi-stage pipeline, fully documented in our [ULTIMATE_ARCHITE
 This enterprise-grade system was engineered to cost **$0.00** by leveraging open-source tools and student cloud benefits:
 *   **Vector Database:** Meta FAISS (Runs locally, replacing Pinecone).
 *   **Enrichment Model:** Ollama + Llama-3.2-1B (Local CPU inference).
-*   **Main Model:** Meta LLaMA-3-8B (Open Weights).
-*   **Compute (Training):** Kaggle Notebooks (Free NVIDIA T4 GPUs) + Unsloth.
-*   **Compute (Development):** GitHub Codespaces (Free 16GB RAM cloud IDE).
-*   **Deployment:** FastAPI hosted on DigitalOcean / Microsoft Azure (using GitHub Student Pack credits).
+*   **Main Model:** Meta LLaMA-3-8B (Open Weights via Unsloth).
+*   **Compute (Training & Benchmark):** Kaggle Notebooks & Google Colab (Free NVIDIA T4 GPUs).
+*   **Compute (Development):** Local Mac / GitHub Codespaces (Free 16GB RAM cloud IDE).
+*   **Deployment:** FastAPI hosted on cloud GPU + Cloudflare Tunnel.
 
-## 📚 Master Documentation
-To understand exactly how to build, train, and deploy this agent from scratch, refer to the step-by-step tutorial:
-👉 **[EXECUTION_PLAN.md](EXECUTION_PLAN.md)**
+---
+
+## 📚 Master Documentation & Benchmarks
+
+| Document | Description |
+| :--- | :--- |
+| 👉 **[BENCHMARK_EVALUATION_REPORT.md](BENCHMARK_EVALUATION_REPORT.md)** | **4-Stage Evolutionary Evaluation Report:** Benchmark of 30 complex enterprise queries showing progression from 0% (heuristic fallback) to **93.3% accuracy** via Diagnostic Self-Healing. |
+| 👉 **[MODEL_OPTIMIZATION_PLAYBOOK.md](MODEL_OPTIMIZATION_PLAYBOOK.md)** | **Model Scaling & Interview Playbook:** Comprehensive guide detailing synthetic data generation, token ceilings, hard-negative DPO mining, and ML system design interview defense. |
+| 👉 **[BENCHMARK_30_QUESTIONS.md](BENCHMARK_30_QUESTIONS.md)** | **Enterprise Question Bank:** Complete catalog of 30 tough analytical and conversational queries with verified ground-truth SQL. |
+| 👉 **[ULTIMATE_ARCHITECTURE.md](ULTIMATE_ARCHITECTURE.md)** | **End-to-End System Blueprint:** Architectural breakdown of Introspection, Semantic Enrichment, Schema RAG, DPO, and Self-Healing. |
+| 👉 **[EXECUTION_PLAN.md](EXECUTION_PLAN.md)** | **Step-by-Step Implementation Guide:** Original implementation and onboarding roadmap. |

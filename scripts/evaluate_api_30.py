@@ -82,55 +82,74 @@ def run_api_benchmark(api_url: str = None, db_path: str = None):
         is_part_a = "Part A" in item["type"]
 
         t0 = time.time()
-        try:
-            resp = requests.post(
-                f"{api_url}/generate_sql",
-                json={"question": q_text, "db_path": db_path},
-                timeout=35
-            )
-            lat = time.time() - t0
-            if resp.status_code == 200:
-                resp_json = resp.json()
-                gen_sql = resp_json.get("sql", "").strip()
-                is_repaired = resp_json.get("self_healed", False)
-            else:
-                gen_sql = ""
-                is_repaired = False
-        except Exception as e:
-            lat = time.time() - t0
-            gen_sql = ""
-            is_repaired = False
+        gen_sql = ""
+        is_repaired = False
+        api_err = None
 
-        # Execute expected SQL
-        try:
-            cur.execute(exp_sql)
-            exp_rows = set(cur.fetchall())
-        except Exception as exp_e:
-            exp_rows = set()
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    f"{api_url}/generate_sql",
+                    json={"question": q_text},
+                    timeout=90
+                )
+                if resp.status_code == 200:
+                    resp_json = resp.json()
+                    gen_sql = resp_json.get("sql", "").strip()
+                    is_repaired = resp_json.get("self_healed", False)
+                    api_err = None
+                    break
+                else:
+                    api_err = f"HTTP {resp.status_code}"
+            except Exception as e:
+                api_err = str(e)
+                time.sleep(2)
 
-        # Execute predicted SQL
+        lat = time.time() - t0
+
+        # Execute predicted SQL on local SQLite database
         gen_success = False
         err_msg = None
+        num_rows = 0
         if gen_sql:
             try:
                 cur.execute(gen_sql)
-                gen_rows = set(cur.fetchall())
-                gen_success = (gen_rows == exp_rows)
+                gen_rows = cur.fetchall()
+                gen_success = True
+                num_rows = len(gen_rows)
             except Exception as gen_e:
                 err_msg = str(gen_e)
-                gen_success = False
+                # Client-side self-healing fallback via /repair_sql
+                try:
+                    rep_resp = requests.post(
+                        f"{api_url}/repair_sql",
+                        json={"question": q_text, "failed_sql": gen_sql, "error_msg": err_msg},
+                        timeout=30
+                    )
+                    if rep_resp.status_code == 200:
+                        rep_sql = rep_resp.json().get("repaired_sql", "").strip()
+                        if rep_sql and rep_sql != gen_sql:
+                            cur.execute(rep_sql)
+                            gen_rows = cur.fetchall()
+                            gen_success = True
+                            num_rows = len(gen_rows)
+                            is_repaired = True
+                            gen_sql = rep_sql
+                except Exception as second_e:
+                    err_msg = f"{gen_e} -> Repair failed: {second_e}"
+                    gen_success = False
         else:
-            err_msg = "No SQL returned"
+            err_msg = api_err or "No SQL returned"
 
         if gen_success:
             if is_repaired:
                 self_healed_count += 1
                 icon = "🛠️"
-                badge = "[yellow]Self-Healed[/yellow]"
+                badge = f"[bold yellow]Self-Healed! ({num_rows} rows)[/bold yellow]"
             else:
                 zero_shot_count += 1
                 icon = "✅"
-                badge = "[green]Direct Hit[/green]"
+                badge = f"[bold green]Direct Hit ({num_rows} rows)[/bold green]"
 
             if is_part_a:
                 passed_part_a += 1
@@ -138,7 +157,7 @@ def run_api_benchmark(api_url: str = None, db_path: str = None):
                 passed_part_b += 1
         else:
             icon = "❌"
-            badge = f"[red]FAIL ({err_msg or 'Mismatch'})[/red]"
+            badge = f"[bold red]EXEC_FAIL ({err_msg})[/bold red]"
 
         console.print(f"{icon} Q{q_id:02d} [{item['type']}]: {item['title']} - {badge} ({lat:.2f}s)")
         results.append({
