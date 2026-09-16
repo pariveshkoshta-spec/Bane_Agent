@@ -124,14 +124,15 @@ class ModelEngine:
 
     def _heuristic_sql(self, question: str, schema_context: str) -> str:
         """
-        Grounded heuristic generator matching question intent to retrieved schemas.
+        Intelligent schema-grounded generator matching question intent, column names,
+        filters, and limits based on retrieved schemas.
         """
         q_lower = question.lower()
         tables = list(introspected_schemas.keys())
         if not tables:
             return "SELECT 1;"
 
-        # Use the #1 most relevant table retrieved by FAISS vector search
+        # 1. Select the top table identified by FAISS
         retrieved_tables = re.findall(r"CREATE\s+TABLE\s+(\w+)", schema_context, re.IGNORECASE)
         if retrieved_tables and retrieved_tables[0] in tables:
             target_table = retrieved_tables[0]
@@ -143,13 +144,75 @@ class ModelEngine:
                     target_table = t
                     break
 
-        # Check for aggregate or filter intent
+        # 2. Extract column names from the target table's schema
+        table_schema = introspected_schemas.get(target_table, "")
+        # Grab words that look like column definitions (name TYPE)
+        col_matches = re.findall(r"(\b[a-zA-Z_][a-zA-Z0-9_]*\b)\s+(?:INTEGER|TEXT|REAL|BLOB|BOOLEAN)", table_schema, re.IGNORECASE)
+        columns = [c for c in col_matches if c.upper() not in ("PRIMARY", "KEY", "FOREIGN", "NOT", "NULL", "CHECK", "DEFAULT")]
+
+        # 3. Detect requested columns
+        selected_cols = []
+        if "name" in q_lower:
+            name_cols = [c for c in columns if "name" in c.lower()]
+            if name_cols:
+                selected_cols.extend(name_cols)
+        if "email" in q_lower:
+            email_cols = [c for c in columns if "email" in c.lower()]
+            if email_cols:
+                selected_cols.extend(email_cols)
+        if "country" in q_lower:
+            country_cols = [c for c in columns if "country" in c.lower()]
+            if country_cols:
+                selected_cols.extend(country_cols)
+        if "mrr" in q_lower or "fee" in q_lower or "price" in q_lower:
+            price_cols = [c for c in columns if any(k in c.lower() for k in ["mrr", "fee", "amount", "price"])]
+            if price_cols:
+                selected_cols.extend(price_cols)
+
+        col_clause = ", ".join(dict.fromkeys(selected_cols)) if selected_cols else "*"
+
+        # 4. Detect WHERE filter conditions
+        where_clauses = []
+        if "enterprise" in q_lower and "tier" in [c.lower() for c in columns]:
+            where_clauses.append("tier = 'ENTERPRISE'")
+        if "starter" in q_lower and "tier" in [c.lower() for c in columns]:
+            where_clauses.append("tier = 'STARTER'")
+        if "growth" in q_lower and "tier" in [c.lower() for c in columns]:
+            where_clauses.append("tier = 'GROWTH'")
+        if "free" in q_lower and "tier" in [c.lower() for c in columns]:
+            where_clauses.append("tier = 'FREE'")
+        if "cancelled" in q_lower or "churned" in q_lower:
+            if "is_cancelled" in [c.lower() for c in columns]:
+                where_clauses.append("is_cancelled = 1")
+        elif "active" in q_lower:
+            if "is_cancelled" in [c.lower() for c in columns]:
+                where_clauses.append("is_cancelled = 0")
+        if "critical" in q_lower or "urgent" in q_lower:
+            if "priority_lvl" in [c.lower() for c in columns]:
+                where_clauses.append("priority_lvl = 'P1_CRITICAL'")
+        if "unresolved" in q_lower or "open" in q_lower:
+            if "resolved_flag" in [c.lower() for c in columns]:
+                where_clauses.append("resolved_flag = 0")
+
+        where_stmt = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        # 5. Handle LIMIT / Sorting
+        # If user explicitly asked for 'all' or 'every', do NOT limit the result set!
+        explicit_all = any(word in q_lower.split() for word in ["all", "every", "entire", "total"])
+
         if "count" in q_lower or "how many" in q_lower:
-            return f"SELECT COUNT(*) AS total_count FROM {target_table};"
+            return f"SELECT COUNT(*) AS total_count FROM {target_table}{where_stmt};"
+
+        limit_match = re.search(r"top\s+(\d+)", q_lower)
+        if limit_match:
+            limit_n = limit_match.group(1)
+            return f"SELECT {col_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT {limit_n};"
         elif "top" in q_lower or "highest" in q_lower or "most" in q_lower:
-            return f"SELECT * FROM {target_table} ORDER BY 1 DESC LIMIT 5;"
+            return f"SELECT {col_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT 5;"
+        elif explicit_all:
+            return f"SELECT {col_clause} FROM {target_table}{where_stmt};"
         else:
-            return f"SELECT * FROM {target_table} LIMIT 10;"
+            return f"SELECT {col_clause} FROM {target_table}{where_stmt} LIMIT 20;"
 
 engine = ModelEngine(ADAPTER_PATH)
 

@@ -78,6 +78,12 @@ def query(
         start_time = time.time()
         response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
         
+        if response.status_code == 400 and "not been initialized" in response.text:
+            console.print("[dim]⚡ Database index not loaded on server. Auto-initializing...[/dim]")
+            init_resp = requests.post(f"{API_URL}/init", json={"db_path": os.path.abspath(db_path)}, timeout=30)
+            if init_resp.status_code == 200:
+                response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
+
         if response.status_code != 200:
             console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {response.text}")
             return
