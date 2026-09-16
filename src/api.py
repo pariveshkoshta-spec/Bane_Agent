@@ -36,40 +36,61 @@ class ModelEngine:
         self.model = None
         self.tokenizer = None
         self.is_loaded = False
+        self.load_error = None
+        self.device = "unknown"
 
     def load_model(self):
         """
         Attempts to load the trained LoRA adapter weights if torch/transformers are installed.
         """
         if self.is_loaded:
-            return
+            return True, "Model already loaded."
 
         if not os.path.exists(self.adapter_path):
-            print(f"[WARN] Adapter directory not found at {self.adapter_path}")
-            return
+            self.load_error = f"Adapter directory not found at {self.adapter_path}"
+            print(f"[WARN] {self.load_error}")
+            return False, self.load_error
 
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
             from peft import PeftModel
 
-            print(f"[INFO] Loading fine-tuned LoRA adapters from {self.adapter_path}...")
+            cuda_available = torch.cuda.is_available()
+            mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            self.device = "cuda" if cuda_available else ("mps" if mps_available else "cpu")
+
+            print(f"[INFO] Detected device: {self.device}. Loading adapters from {self.adapter_path}...")
             base_model_name = "unsloth/llama-3-8b-instruct-bnb-4bit"
             self.tokenizer = AutoTokenizer.from_pretrained(self.adapter_path)
 
-            device_map = "auto" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                device_map=device_map
-            )
+            if cuda_available:
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model_name,
+                    torch_dtype=torch.float16,
+                    device_map="auto"
+                )
+            else:
+                # CPU or MPS: bitsandbytes 4-bit requires CUDA.
+                print(f"[INFO] Attempting to load {base_model_name} on {self.device}...")
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model_name,
+                    device_map="cpu",
+                    low_cpu_mem_usage=True
+                )
+
             self.model = PeftModel.from_pretrained(base_model, self.adapter_path)
             self.model.eval()
             self.is_loaded = True
+            self.load_error = None
             print("[INFO] Model and adapters successfully loaded!")
+            return True, "Model and LoRA adapters successfully loaded."
         except Exception as e:
-            print(f"[INFO] Local PyTorch/GPU inference skipped ({e}).")
+            err_str = str(e)
+            print(f"[WARN] PyTorch model loading skipped ({err_str}).")
+            self.load_error = err_str
             self.is_loaded = False
+            return False, err_str
 
     def generate_sql(self, question: str, schema_context: str) -> str:
         """
@@ -238,8 +259,24 @@ async def health_check():
         "adapter_path": ADAPTER_PATH,
         "adapter_present": os.path.exists(ADAPTER_PATH),
         "model_loaded": engine.is_loaded,
+        "device": engine.device,
+        "load_error": engine.load_error,
         "db_initialized": db_initialized,
         "indexed_tables": list(introspected_schemas.keys())
+    }
+
+@app.post("/load_model")
+async def trigger_load_model():
+    """
+    Explicitly triggers fine-tuned model and adapter loading and returns diagnostics.
+    """
+    success, msg = engine.load_model()
+    return {
+        "success": success,
+        "message": msg,
+        "model_loaded": engine.is_loaded,
+        "device": engine.device,
+        "load_error": engine.load_error
     }
 
 @app.post("/init")
@@ -249,11 +286,34 @@ async def initialize_database(request: InitRequest):
     and builds the FAISS vector index.
     """
     global db_initialized, introspected_schemas, rules_cache
-    if not os.path.exists(request.db_path):
-        raise HTTPException(status_code=404, detail=f"Database file '{request.db_path}' not found.")
+
+    # 1. Resolve database path (absolute, relative, or in repo root)
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_path = request.db_path
+
+    if not os.path.isabs(target_path):
+        candidate = os.path.join(repo_root, target_path)
+        if os.path.exists(candidate):
+            target_path = candidate
+
+    # If missing, attempt automatic generation for enterprise_nexus
+    if not os.path.exists(target_path):
+        gen_script = os.path.join(repo_root, "scripts", "generate_enterprise_nexus.py")
+        if os.path.exists(gen_script):
+            import subprocess
+            try:
+                subprocess.run(["python", gen_script], check=True, cwd=repo_root)
+                auto_db = os.path.join(repo_root, "enterprise_nexus.sqlite")
+                if os.path.exists(auto_db):
+                    target_path = auto_db
+            except Exception as e:
+                print(f"[WARN] Failed to auto-generate enterprise_nexus.sqlite: {e}")
+
+    if not os.path.exists(target_path):
+        raise HTTPException(status_code=404, detail=f"Database file '{request.db_path}' not found at '{target_path}'.")
 
     try:
-        introspector = DatabaseIntrospector(request.db_path)
+        introspector = DatabaseIntrospector(target_path)
         introspected_schemas = introspector.extract_schemas()
 
         enriched_rules = []
@@ -268,11 +328,17 @@ async def initialize_database(request: InitRequest):
         retriever.build_index(introspected_schemas, json_rules=enriched_rules)
         db_initialized = True
 
+        # Also attempt to load model in background if not attempted yet
+        if not engine.is_loaded and engine.load_error is None:
+            engine.load_model()
+
         return {
             "status": "success",
             "message": f"Successfully indexed {len(introspected_schemas)} tables into FAISS.",
+            "db_path_resolved": target_path,
             "tables": list(introspected_schemas.keys()),
-            "rules_indexed": len(enriched_rules)
+            "rules_indexed": len(enriched_rules),
+            "model_loaded": engine.is_loaded
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -293,13 +359,19 @@ async def generate_sql(request: QueryRequest):
         top_k = request.top_k or 3
         schema_context = retriever.retrieve_context(request.question, top_k=top_k)
 
-        # 2. Generate aligned SQL query
+        # 2. Attempt model load if not yet loaded and no error recorded
+        if not engine.is_loaded and engine.load_error is None:
+            engine.load_model()
+
+        # 3. Generate aligned SQL query
         sql = engine.generate_sql(request.question, schema_context)
 
         return {
             "question": request.question,
             "context_used": schema_context,
-            "sql": sql
+            "sql": sql,
+            "model_loaded": engine.is_loaded
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
