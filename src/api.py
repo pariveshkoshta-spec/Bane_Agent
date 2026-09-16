@@ -80,7 +80,8 @@ class ModelEngine:
 
             print(f"[INFO] Detected device: {self.device}. Loading adapters from {self.adapter_path}...")
             base_model_name = "unsloth/llama-3-8b-instruct-bnb-4bit"
-            self.tokenizer = AutoTokenizer.from_pretrained(self.adapter_path)
+            tok_source = self.adapter_path if os.path.exists(os.path.join(self.adapter_path, "tokenizer.json")) else base_model_name
+            self.tokenizer = AutoTokenizer.from_pretrained(tok_source)
 
             if cuda_available:
                 base_model = AutoModelForCausalLM.from_pretrained(
