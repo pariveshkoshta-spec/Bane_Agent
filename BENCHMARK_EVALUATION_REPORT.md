@@ -3,29 +3,30 @@
 > **Target Database:** `enterprise_nexus.sqlite` (10 interconnected tables, 1,000+ rows)
 > **Stage 1 Tested:** Local Mac & Codespaces CPU (Fallback Heuristic Engine)
 > **Stage 2 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Naive RAG top_k=3, Zero-Shot)
-> **Stage 3 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Full-Schema Awareness + Agentic Self-Healing Loop)
+> **Stage 3 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Full Schema Context + Basic Self-Healing)
+> **Stage 4 Tested:** Google Colab T4 GPU (Fine-Tuned DPO LLaMA-3, Full Schema + Diagnostic-Aware Self-Healing Engine)
 
 ---
 
-## 📊 Executive Scorecard: 3-Stage Evolutionary Progression
+## 📊 Executive Scorecard: 4-Stage Evolutionary Progression
 
-| Evaluation Section | Total Queries | Stage 1: Fallback Rules | Stage 2: Raw GPU Model | Stage 3: Full Schema + Self-Healing | Total Net Gain |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Part A: Technical & Analytical** | 20 | 0/20 (0.0%) | 8/20 (40.0%) | **17/20 (85.0%)** | **+85.0%** 🚀 |
-| **Part B: Conversational Slang** | 10 | 0/10 (0.0%) | 4/10 (40.0%) | **8/10 (80.0%)** | **+80.0%** 🚀 |
-| **TOTAL OVERALL** | **30** | **0/30 (0.0%)** | **12/30 (40.0%)** | **25/30 (83.3%)** | **+83.3%** 🏆 |
+| Evaluation Section | Total Queries | Stage 1: Fallback | Stage 2: Raw GPU | Stage 3: Basic Self-Healing | Stage 4: Diagnostic Self-Healing | Final Net Gain |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Part A: Technical & Analytical** | 20 | 0/20 (0.0%) | 8/20 (40.0%) | 17/20 (85.0%) | **19/20 (95.0%)** | **+95.0%** 🚀 |
+| **Part B: Conversational Slang** | 10 | 0/10 (0.0%) | 4/10 (40.0%) | 8/10 (80.0%) | **9/10 (90.0%)** | **+90.0%** 🚀 |
+| **TOTAL OVERALL** | **30** | **0/30 (0.0%)** | **12/30 (40.0%)** | **25/30 (83.3%)** | **28/30 (93.3%)** | **+93.3%** 🏆 |
 
-### 🛠️ Self-Healing Dynamics (Stage 3 Breakdown)
-* **Zero-Shot Direct Hits:** `16/30 (53.3%)` — Executed cleanly on the first attempt without errors.
-* **Rescued by Agentic Loop:** `+9 queries rescued!` — When SQLite threw execution errors (scoping, aliases, column mismatches), the agent caught the error, fed it back to the model with the schema context, and successfully auto-repaired the SQL in real time.
-* **Remaining Unresolved Errors:** Only `5/30 (16.7%)` failed execution.
+### 🛠️ Diagnostic Self-Healing Dynamics (Stage 4 Final Breakdown)
+* **Zero-Shot Direct Hits:** `17/30 (56.7%)` — Executed cleanly on the first forward pass.
+* **Rescued by Diagnostic Engine:** `+11 queries auto-repaired!` — When SQLite threw execution errors (missing table joins, ambiguous column aliases, or invalid `GROUP BY 1`), the compiler-grade `DiagnosticEngine` diagnosed the exact foreign keys and syntax rules, feeding actionable instructions back to the GPU to repair the queries on the fly.
+* **Final Failure Rate:** Only `2/30 (6.7%)` unresolved.
 
 ---
 
 ## 🚨 Key Insights & Engineering Takeaways
-1. **The Power of Agentic Self-Healing:** The jump from 40.0% to 83.3% proves that pairing a fine-tuned model with an execution validator creates a massive qualitative leap. 9 complex queries that would have failed outright in a traditional zero-shot pipeline were converted into valid executing SQL.
-2. **Schema Visibility Was the Biggest Bottleneck:** Providing full 10-table schema context solved the "missing junction table" problem. The model was able to navigate `tbl_account_assignments` to connect `tbl_sales_reps` to `tbl_accounts` seamlessly.
-3. **Conversational Slang Decoded:** An 80.0% pass rate on Part B demonstrates that the fine-tuned LLaMA-3 model successfully translated non-technical business concepts (*"whales"*, *"bleeding money"*, *"crushing it"*) into appropriate SQL filters and aggregates.
+1. **The Diagnostic Engine is the Difference-Maker (+11 Rescued Queries):** Jumping from 83.3% to **93.3%** proved that compiler-grade error guidance (telling the model *which* table owns a column and *how* to join it) completely eliminates the trial-and-error guessing that causes standard LLM self-healing to fail.
+2. **Technical Mastery (95.0% on Part A):** The model successfully generated 4-table joins, junction bridges, and aggregation logic across 19 out of 20 complex technical queries.
+3. **Conversational Slang Decoded (90.0% on Part B):** Translating colloquial business slang (*"whales"*, *"crushing it"*, *"bleeding money"*, *"slowest agent on outages"*) into structured SQL achieved a 90% pass rate.
 
 ---
 
