@@ -1,7 +1,8 @@
 # Complete Benchmark Evaluation Report: 30 Tough & Messy Queries
 
 > **Target Database:** `enterprise_nexus.sqlite` (10 interconnected tables, 1,000+ rows)
-> **Environment Tested:** Local Mac M1 (Fallback Heuristic Engine)
+> **API Server Endpoint Tested:** `https://miniature-space-adventure-pj4vjrr6x6p7c7wgv-8000.app.github.dev/` (GitHub Codespaces Cloud Deployment)
+> **Inference Engine Observed:** Fallback Heuristic Generator (LoRA PyTorch weights inactive due to CPU VM hardware & missing CUDA/peft)
 
 ---
 
@@ -9,14 +10,14 @@
 
 | Evaluation Section | Total Queries | Syntax Execution Pass | Complex Semantic Pass | Main Failure Reason |
 | :--- | :---: | :---: | :---: | :--- |
-| **Part A: Technical & Analytical** | 20 | 20/20 (100%) | 0/20 (0%) | Heuristics cannot generate 4-table JOINs, Window functions (`DENSE_RANK`), or `GROUP BY ... HAVING`. |
-| **Part B: Messy / Non-Tech Slang** | 10 | 10/10 (100%) | 0/10 (0%) | Rules cannot decode conversational slang (*'whales'*, *'bleeding money'*, *'crushing it'*). |
+| **Part A: Technical & Analytical** | 20 | 20/20 (100%) | 0/20 (0%) | Heuristic engine cannot generate 4-table JOINs, Window functions (`DENSE_RANK`), or `GROUP BY ... HAVING`. |
+| **Part B: Messy / Non-Tech Slang** | 10 | 10/10 (100%) | 0/10 (0%) | Heuristics cannot decode conversational slang (*'whales'*, *'bleeding money'*, *'crushing it'*). |
 | **TOTAL OVERALL** | **30** | **30/30 (100%)** | **0/30 (0%)** | Requires neural LLM inference & schema linking rather than static Python rules. |
 
 ---
 
-## 🚨 Key Insights: Why Every Complex Query Failed Locally
-1. **The Fine-Tuned LLaMA-3 Model Is Inactive Locally:** To prevent your 8GB Mac from freezing, the API defaulted to a fallback heuristic script (`_heuristic_sql`).
+## 🚨 Key Findings: Why Every Complex Query Failed on Codespaces
+1. **The Fallback Engine Executed Instead of the Neural Weights:** When the Codespaces API started, `/load_model` reported `No module named 'peft'` because `peft` wasn't installed, and Codespaces VMs are standard 2/4-core CPU machines without NVIDIA CUDA GPUs. 4-bit `bitsandbytes` quantization strictly requires CUDA. As a result, the API gracefully fell back to `_heuristic_sql`.
 2. **The Slang & Semantic Blindspot (Part B):** Non-technical users ask: *'Who are our biggest whales that cancelled?'*. A rule engine looks for a column named `whale`. A fine-tuned LLM understands that *'whales'* refers to `tier_segment IN ('TIER_1_VIP', 'TIER_2_ENT')` and *'cancelled'* means `cancellation_date IS NOT NULL`.
 3. **The Multi-Table Bridge Problem:** Questions requiring 3 to 4 tables failed because the RAG engine only retrieved the primary tables and missed intermediate junction tables (e.g. `tbl_account_assignments`).
 
