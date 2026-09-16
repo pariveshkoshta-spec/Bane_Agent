@@ -1,0 +1,112 @@
+[
+  {
+    "id": 21,
+    "title": "Big Whales Who Cancelled",
+    "question": "Who are our biggest whales that cancelled on us and what excuse did they give?",
+    "agent_sql": "SELECT * FROM tbl_usage_telemetry LIMIT 20;",
+    "fault": "1. Semantic Failure: Did not understand non-tech slang 'whales' (failed to filter for VIP/Enterprise accounts).\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT a.client_legal_name, s.plan_code, ROUND(s.mrr_cents / 100.0, 2) AS lost_mrr_usd,\n       s.cancellation_date, s.cancellation_reason_code\nFROM tbl_accounts a\nJOIN tbl_subscriptions_hist s ON a.acct_id = s.acct_id\nWHERE s.cancellation_date IS NOT NULL AND a.tier_segment IN ('TIER_1_VIP', 'TIER_2_ENT')\nORDER BY s.mrr_cents DESC;",
+    "expected_explanation": "Translates non-tech slang 'biggest whales' to VIP/Enterprise tiers, maps 'cancelled' to non-null cancellation_date, and selects reason codes ordered by lost revenue.",
+    "status": "SUCCESS",
+    "rows": 20
+  },
+  {
+    "id": 22,
+    "title": "Top Cash Producer Sales Rep",
+    "question": "Which sales rep is crushing it the most this year in terms of actual settled cash, not just contracts?",
+    "agent_sql": "SELECT * FROM tbl_subscriptions_hist ORDER BY 1 DESC LIMIT 5;",
+    "fault": "1. Semantic Failure: Did not translate business slang 'crushing it in settled cash' into SUM(net_amt_usd) with SETTLED filter.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT r.rep_name, r.territory, ROUND(SUM(t.net_amt_usd), 2) AS total_cash_settled_usd\nFROM tbl_sales_reps r\nJOIN tbl_account_assignments aa ON r.rep_id = aa.rep_id\nJOIN tbl_transactions_ledger t ON aa.acct_id = t.acct_id\nWHERE t.settlement_status = 'SETTLED' AND aa.is_primary_owner = 1\nGROUP BY r.rep_id\nORDER BY total_cash_settled_usd DESC\nLIMIT 1;",
+    "expected_explanation": "Decodes 'crushing it in settled cash' to maximum sum of net_amt_usd with settlement_status = 'SETTLED' grouped by rep.",
+    "status": "SUCCESS",
+    "rows": 5
+  },
+  {
+    "id": 23,
+    "title": "Bleeding Accounts (Refunds > Charges)",
+    "question": "Show me accounts that are bleeding us money with more refunds than actual charges.",
+    "agent_sql": "SELECT COUNT(*) AS total_count FROM tbl_subscriptions_hist;",
+    "fault": "1. Semantic Failure: Did not translate 'bleeding us money' into HAVING refund_count > charge_count.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT a.client_legal_name,\n       SUM(CASE WHEN t.tx_type = 'REFUND' THEN 1 ELSE 0 END) AS refund_count,\n       SUM(CASE WHEN t.tx_type = 'CHARGE' THEN 1 ELSE 0 END) AS charge_count,\n       ROUND(SUM(t.gross_amt_usd), 2) AS net_balance_usd\nFROM tbl_accounts a\nJOIN tbl_transactions_ledger t ON a.acct_id = t.acct_id\nGROUP BY a.acct_id\nHAVING refund_count > charge_count;",
+    "expected_explanation": "Translates 'bleeding us money' into conditional aggregation comparing count of refunds vs charges per account with HAVING.",
+    "status": "SUCCESS",
+    "rows": 1
+  },
+  {
+    "id": 24,
+    "title": "VIP Clients with Terrible Support Reviews",
+    "question": "Find the VIP clients who had terrible support experience lately with really bad review scores.",
+    "agent_sql": "SELECT * FROM tbl_support_cases LIMIT 20;",
+    "fault": "1. Semantic Failure: Missed mapping 'bad review scores' to csat_score <= 2.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT a.client_legal_name, sc.case_number, sc.csat_score, sc.severity_level, sc.created_ts\nFROM tbl_accounts a\nJOIN tbl_support_cases sc ON a.acct_id = sc.acct_id\nWHERE a.tier_segment = 'TIER_1_VIP' AND sc.csat_score <= 2\nORDER BY sc.csat_score ASC, sc.created_ts DESC;",
+    "expected_explanation": "Maps 'VIP clients' to tier_segment = 'TIER_1_VIP' and 'bad review scores' to csat_score <= 2, joining accounts with support cases.",
+    "status": "SUCCESS",
+    "rows": 20
+  },
+  {
+    "id": 25,
+    "title": "Total MRR in Plain Dollars",
+    "question": "What's our total monthly recurring revenue right now in plain dollars, not pennies?",
+    "agent_sql": "SELECT * FROM tbl_subscriptions_hist;",
+    "fault": "1. Math & Unit Failure: Ignored user's explicit request for 'plain dollars, not pennies' (failed to divide mrr_cents by 100.0).",
+    "expected_sql": "SELECT ROUND(SUM(mrr_cents) / 100.0, 2) AS total_active_mrr_usd\nFROM tbl_subscriptions_hist\nWHERE cancellation_date IS NULL;",
+    "expected_explanation": "Understands 'plain dollars, not pennies' requires dividing mrr_cents by 100.0 for active subscriptions.",
+    "status": "SUCCESS",
+    "rows": 68
+  },
+  {
+    "id": 26,
+    "title": "Silent Sufferers (Errors with No Ticket)",
+    "question": "Are there any accounts getting hammered with server errors but nobody filed a ticket for them?",
+    "agent_sql": "SELECT COUNT(*) AS total_count FROM tbl_transactions_ledger;",
+    "fault": "1. Relational Logic Failure: Failed to apply LEFT JOIN with NULL check to identify silent sufferers without support cases.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT a.client_legal_name, SUM(u.error_count_5xx) AS total_server_errors\nFROM tbl_accounts a\nJOIN tbl_usage_telemetry u ON a.acct_id = u.acct_id\nLEFT JOIN tbl_support_cases sc ON a.acct_id = sc.acct_id\nWHERE sc.case_number IS NULL\nGROUP BY a.acct_id\nHAVING total_server_errors > 0\nORDER BY total_server_errors DESC;",
+    "expected_explanation": "Understands 'nobody filed a ticket' implies a LEFT JOIN on tbl_support_cases with WHERE sc.case_number IS NULL and positive 5xx errors.",
+    "status": "SUCCESS",
+    "rows": 1
+  },
+  {
+    "id": 27,
+    "title": "Add-ons Bundled with Enterprise Plans",
+    "question": "Which products are driving the most money when bundled with our big enterprise plans?",
+    "agent_sql": "SELECT * FROM tbl_subscriptions_hist ORDER BY 1 DESC LIMIT 5;",
+    "fault": "1. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT p.product_name, p.category, ROUND(SUM(oi.line_total_usd), 2) AS gross_sales_usd\nFROM tbl_order_items oi\nJOIN tbl_products_catalog p ON oi.prod_sku = p.prod_sku\nJOIN tbl_transactions_ledger t ON oi.tx_id = t.tx_id\nJOIN tbl_subscriptions_hist s ON t.sub_contract_id = s.sub_contract_id\nWHERE s.plan_code = 'PLAN_ENT_CUSTOM'\nGROUP BY p.prod_sku\nORDER BY gross_sales_usd DESC;",
+    "expected_explanation": "Links products, order items, transactions, and subscriptions with plan_code = 'PLAN_ENT_CUSTOM'.",
+    "status": "SUCCESS",
+    "rows": 5
+  },
+  {
+    "id": 28,
+    "title": "Delinquent European Clients",
+    "question": "Give me a list of folks in Europe who haven't paid their bills and are suspended.",
+    "agent_sql": "SELECT * FROM tbl_accounts LIMIT 20;",
+    "fault": "Basic single-table query generated without full relational complexity.",
+    "expected_sql": "SELECT client_legal_name, contact_person, contact_email, country_iso3, acct_status_flg\nFROM tbl_accounts\nWHERE country_iso3 IN ('DEU', 'GBR', 'FRA') AND acct_status_flg IN ('S', 'D');",
+    "expected_explanation": "Translates 'Europe' to European ISO codes (DEU, GBR, FRA) and 'haven't paid and suspended' to status flags 'S' and 'D'.",
+    "status": "SUCCESS",
+    "rows": 20
+  },
+  {
+    "id": 29,
+    "title": "Slowest Agent on Critical Outages",
+    "question": "Who is our slowest support agent to reply when a customer has a critical emergency blocker?",
+    "agent_sql": "SELECT * FROM tbl_support_cases LIMIT 20;",
+    "fault": "1. Ranking Failure: Failed to calculate average response time and sort descending to find the slowest agent.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT sa.agent_full_name, sa.region,\n       ROUND(AVG(sc.first_response_time_minutes), 1) AS avg_blocker_response_mins,\n       COUNT(*) AS blocker_cases_handled\nFROM tbl_support_agents sa\nJOIN tbl_support_cases sc ON sa.agent_id = sc.assigned_agent_id\nWHERE sc.severity_level = 'SEV_1_BLOCKER'\nGROUP BY sa.agent_id\nORDER BY avg_blocker_response_mins DESC\nLIMIT 1;",
+    "expected_explanation": "Translates 'critical emergency blocker' to SEV_1_BLOCKER and 'slowest support agent' to MAX(AVG(first_response_time_minutes)).",
+    "status": "SUCCESS",
+    "rows": 20
+  },
+  {
+    "id": 30,
+    "title": "Cheap Tier Heavy Compute Hogs",
+    "question": "Which accounts used an insane amount of compute hours last week but are only on our cheap starter tier?",
+    "agent_sql": "SELECT COUNT(*) AS total_count FROM tbl_usage_telemetry;",
+    "fault": "1. Tier Mapping Failure: Failed to map 'cheap starter tier' to TIER_4_SMB.\n2. Missing Multi-Table JOIN: The query required joining multiple tables, but only queried a single table.",
+    "expected_sql": "SELECT a.client_legal_name, a.tier_segment,\n       ROUND(SUM(u.compute_hours_consumed), 2) AS total_compute_hours,\n       SUM(u.api_calls_count) AS total_api_calls\nFROM tbl_accounts a\nJOIN tbl_usage_telemetry u ON a.acct_id = u.acct_id\nWHERE a.tier_segment = 'TIER_4_SMB'\nGROUP BY a.acct_id\nORDER BY total_compute_hours DESC\nLIMIT 5;",
+    "expected_explanation": "Translates 'cheap starter tier' to TIER_4_SMB and 'insane amount of compute hours' to ORDER BY SUM(compute_hours_consumed) DESC.",
+    "status": "SUCCESS",
+    "rows": 1
+  }
+]
