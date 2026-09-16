@@ -76,13 +76,17 @@ def query(
 
     try:
         start_time = time.time()
-        response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
+        payload = {
+            "question": question,
+            "db_path": os.path.abspath(db_path)
+        }
+        response = requests.post(f"{API_URL}/generate_sql", json=payload, timeout=60)
         
         if response.status_code == 400 and "not been initialized" in response.text:
             console.print("[dim]⚡ Database index not loaded on server. Auto-initializing...[/dim]")
             init_resp = requests.post(f"{API_URL}/init", json={"db_path": os.path.abspath(db_path)}, timeout=30)
             if init_resp.status_code == 200:
-                response = requests.post(f"{API_URL}/generate_sql", json={"question": question}, timeout=60)
+                response = requests.post(f"{API_URL}/generate_sql", json=payload, timeout=60)
 
         if response.status_code != 200:
             console.print(f"[bold red]API Error ({response.status_code}):[/bold red] {response.text}")
@@ -90,11 +94,23 @@ def query(
 
         data = response.json()
         sql = data.get("sql", "").strip()
+        self_healed = data.get("self_healed", False)
+        diagnostic = data.get("repair_diagnostic")
 
         # If user only wanted the raw SQL for scripts/copying
         if sql_only:
             console.print(sql)
             return
+
+        if self_healed and diagnostic:
+            console.print(
+                Panel(
+                    f"[bold yellow]Compiler Diagnostic Guidance:[/bold yellow]\n{diagnostic}",
+                    title="[bold yellow]🛠️ Query Auto-Repaired by Bane Diagnostic Loop[/bold yellow]",
+                    border_style="yellow",
+                    padding=(0, 1)
+                )
+            )
 
         # Execute against local SQLite database
         try:
@@ -123,12 +139,15 @@ def query(
 
             # 2. Prominently display the exact SQL used to produce the above results
             sql_syntax = Syntax(sql, "sql", theme="monokai", line_numbers=False)
+            title = "[bold green]📌 Query used to produce the above results (Auto-Repaired)[/bold green]" if self_healed else "[bold green]📌 Query used to produce the above results[/bold green]"
+            sub = "[dim]Verified by Execution Sandbox (Self-Healed)[/dim]" if self_healed else "[dim]Verified by Execution Sandbox[/dim]"
+            border = "yellow" if self_healed else "bright_blue"
             console.print(
                 Panel(
                     sql_syntax,
-                    title="[bold green]📌 Query used to produce the above results[/bold green]",
-                    subtitle="[dim]Verified by Execution Sandbox[/dim]",
-                    border_style="bright_blue",
+                    title=title,
+                    subtitle=sub,
+                    border_style=border,
                     padding=(1, 2)
                 )
             )
@@ -144,6 +163,27 @@ def query(
                 )
             )
 
+    except requests.exceptions.ConnectionError:
+        console.print(f"[bold red]Error:[/bold red] Could not reach Bane API at '{API_URL}'.")
+        console.print("[dim]Start the API with: uvicorn src.api:app --reload[/dim]")
+
+@app.command()
+def health():
+    """
+    Checks the status of the Bane API server and model load state.
+    """
+    try:
+        resp = requests.get(f"{API_URL}/health", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            console.print("[bold green]✔ Bane API Online[/bold green]")
+            console.print(f"Device: [cyan]{data.get('device')}[/cyan]")
+            console.print(f"Model Loaded: [cyan]{data.get('model_loaded')}[/cyan]")
+            console.print(f"Database Initialized: [cyan]{data.get('db_initialized')}[/cyan]")
+            if data.get('indexed_tables'):
+                console.print(f"Indexed Tables: [cyan]{', '.join(data.get('indexed_tables'))}[/cyan]")
+        else:
+            console.print(f"[bold red]API Error ({resp.status_code}):[/bold red] {resp.text}")
     except requests.exceptions.ConnectionError:
         console.print(f"[bold red]Error:[/bold red] Could not reach Bane API at '{API_URL}'.")
         console.print("[dim]Start the API with: uvicorn src.api:app --reload[/dim]")

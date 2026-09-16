@@ -9,6 +9,7 @@ from src.schema_rag import SchemaRetriever
 from src.db_introspector import DatabaseIntrospector
 from src.prompt_builder import format_dpo_prompt
 from src.semantic_enrichment_agent import SemanticEnrichmentAgent
+from src.execution_validator import DiagnosticEngine, clean_sql_output
 
 app = FastAPI(
     title="Bane Text-to-SQL API",
@@ -21,6 +22,9 @@ retriever = SchemaRetriever()
 db_initialized = False
 introspected_schemas: Dict[str, str] = {}
 rules_cache: List[dict] = []
+current_db_path: Optional[str] = None
+diagnostic_engine: Optional[DiagnosticEngine] = None
+full_schema_context: str = ""
 
 # Adapter path resolution
 DEFAULT_ADAPTER_DIR = os.path.join(
@@ -108,19 +112,13 @@ class ModelEngine:
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=128,
+                    max_new_tokens=160,
                     temperature=0.1,
                     do_sample=False,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
             decoded = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-            sql = decoded.replace(prompt, "").strip()
-            # Clean markdown formatting if present
-            if "```sql" in sql:
-                sql = sql.split("```sql")[1].split("```")[0].strip()
-            elif "```" in sql:
-                sql = sql.split("```")[1].split("```")[0].strip()
-            return sql
+            return clean_sql_output(decoded, prompt)
 
         # 2. Ollama local middleman fallback
         import requests
@@ -134,14 +132,85 @@ class ModelEngine:
             )
             if resp.status_code == 200:
                 raw = resp.json().get("response", "").strip()
-                match = re.search(r"SELECT.*?;", raw, re.IGNORECASE | re.DOTALL)
-                if match:
-                    return match.group(0).strip()
+                return clean_sql_output(raw, prompt)
         except Exception:
             pass
 
         # 3. Fast schema-grounded heuristic generator (for instant local zero-dependency testing)
         return self._heuristic_sql(question, schema_context)
+
+    def repair_sql(
+        self,
+        question: str,
+        failed_sql: str,
+        error_msg: str,
+        diagnostic_hint: str,
+        schema_context: str
+    ) -> str:
+        """
+        Runs one-shot self-healing with surgical compiler diagnostic guidance.
+        """
+        repair_prompt = f"""### Database Schema:
+{schema_context}
+
+### User Question:
+{question}
+
+### Attempted SQL:
+{failed_sql}
+
+### SQLite Execution Error:
+{error_msg}
+
+### Compiler Diagnostic Guidance:
+{diagnostic_hint}
+
+### Instructions:
+Fix the attempted query strictly following the diagnostic guidance and schema above. Return ONLY the corrected, valid SQL query.
+
+### Corrected SQL:
+"""
+        # 1. Real PyTorch model repair
+        if self.is_loaded and self.model is not None and self.tokenizer is not None:
+            import torch
+            inputs = self.tokenizer([repair_prompt], return_tensors="pt")
+            device = next(self.model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=160,
+                    temperature=0.1,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+            raw = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+            return clean_sql_output(raw, repair_prompt)
+
+        # 2. Ollama fallback repair
+        import requests
+        ollama_url = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/generate")
+        ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+        try:
+            resp = requests.post(
+                ollama_url,
+                json={"model": ollama_model, "prompt": repair_prompt, "stream": False},
+                timeout=12
+            )
+            if resp.status_code == 200:
+                raw = resp.json().get("response", "").strip()
+                return clean_sql_output(raw, repair_prompt)
+        except Exception:
+            pass
+
+        # 3. Rule-based / clean fallback
+        cleaned = clean_sql_output(failed_sql)
+        if "remove the 'group by' clause" in diagnostic_hint.lower() or "group by 1" in failed_sql.lower():
+            cleaned = re.sub(r"group\s+by\s+1\b", "", cleaned, flags=re.IGNORECASE).strip()
+            if cleaned.endswith(";"):
+                cleaned = cleaned[:-1].strip() + ";"
+        return cleaned
 
     def _heuristic_sql(self, question: str, schema_context: str) -> str:
         """
@@ -153,17 +222,27 @@ class ModelEngine:
         if not tables:
             return "SELECT 1;"
 
-        # 1. Select the top table identified by FAISS
-        retrieved_tables = re.findall(r"CREATE\s+TABLE\s+(\w+)", schema_context, re.IGNORECASE)
-        if retrieved_tables and retrieved_tables[0] in tables:
-            target_table = retrieved_tables[0]
-        else:
-            target_table = tables[0]
-            for t in tables:
-                clean_t = t.replace("tbl_", "").replace("table_", "").replace("_", " ")
-                if clean_t.lower() in q_lower or t.lower() in q_lower:
-                    target_table = t
+        # 1. Select target table (prioritize explicit mention in question, then FAISS top hit)
+        target_table = None
+        for t in tables:
+            clean_t = t.replace("tbl_", "").replace("table_", "").rstrip("s")
+            clean_t_phrase = clean_t.replace("_", " ")
+            if clean_t_phrase in q_lower or t.lower() in q_lower or (len(clean_t) > 3 and clean_t in q_lower):
+                target_table = t
+                break
+
+        if not target_table and diagnostic_engine and diagnostic_engine.col_to_table:
+            for word in re.findall(r"\w+", q_lower):
+                if word in diagnostic_engine.col_to_table:
+                    target_table = diagnostic_engine.col_to_table[word]
                     break
+
+        if not target_table:
+            retrieved_tables = re.findall(r"CREATE\s+TABLE\s+(\w+)", schema_context, re.IGNORECASE)
+            if retrieved_tables and retrieved_tables[0] in tables:
+                target_table = retrieved_tables[0]
+            else:
+                target_table = tables[0]
 
         # 2. Extract column names from the target table's schema
         table_schema = introspected_schemas.get(target_table, "")
@@ -194,20 +273,28 @@ class ModelEngine:
 
         # 4. Detect WHERE filter conditions
         where_clauses = []
-        if "enterprise" in q_lower and "tier" in [c.lower() for c in columns]:
-            where_clauses.append("tier = 'ENTERPRISE'")
-        if "starter" in q_lower and "tier" in [c.lower() for c in columns]:
-            where_clauses.append("tier = 'STARTER'")
-        if "growth" in q_lower and "tier" in [c.lower() for c in columns]:
-            where_clauses.append("tier = 'GROWTH'")
-        if "free" in q_lower and "tier" in [c.lower() for c in columns]:
-            where_clauses.append("tier = 'FREE'")
+        tier_col = next((c for c in columns if "tier" in c.lower()), None)
+        if tier_col:
+            if "enterprise" in q_lower:
+                where_clauses.append(f"{tier_col} IN ('TIER_2_ENT', 'ENTERPRISE')")
+            elif "starter" in q_lower:
+                where_clauses.append(f"{tier_col} IN ('TIER_4_SMB', 'STARTER')")
+            elif "growth" in q_lower:
+                where_clauses.append(f"{tier_col} IN ('TIER_3_MID', 'GROWTH')")
+            elif "free" in q_lower:
+                where_clauses.append(f"{tier_col} = 'FREE'")
+
         if "cancelled" in q_lower or "churned" in q_lower:
             if "is_cancelled" in [c.lower() for c in columns]:
                 where_clauses.append("is_cancelled = 1")
+            elif "cancellation_date" in [c.lower() for c in columns]:
+                where_clauses.append("cancellation_date IS NOT NULL")
         elif "active" in q_lower:
             if "is_cancelled" in [c.lower() for c in columns]:
                 where_clauses.append("is_cancelled = 0")
+            elif "acct_status_flg" in [c.lower() for c in columns]:
+                where_clauses.append("acct_status_flg = 'A'")
+
         if "critical" in q_lower or "urgent" in q_lower:
             if "priority_lvl" in [c.lower() for c in columns]:
                 where_clauses.append("priority_lvl = 'P1_CRITICAL'")
@@ -222,12 +309,20 @@ class ModelEngine:
         is_distinct = "unique" in q_lower or "distinct" in q_lower
         distinct_str = "DISTINCT " if is_distinct else ""
 
-        if "count" in q_lower or "how many" in q_lower:
+        if re.search(r"\bcount\b", q_lower) or "how many" in q_lower:
             if is_distinct and selected_cols:
                 return f"SELECT COUNT(DISTINCT {selected_cols[0]}) AS unique_count FROM {target_table}{where_stmt};"
             elif is_distinct and columns:
                 return f"SELECT COUNT(DISTINCT {columns[0]}) AS unique_count FROM {target_table}{where_stmt};"
             return f"SELECT COUNT(*) AS total_count FROM {target_table}{where_stmt};"
+
+        avg_col = next((c for c in columns if any(k in c.lower() for k in ["gb", "amount", "usd", "cents", "hours", "count", "storage"])), None)
+        if ("average" in q_lower or "avg" in q_lower) and avg_col:
+            return f"SELECT AVG({avg_col}) AS avg_{avg_col} FROM {target_table}{where_stmt};"
+
+        sum_col = next((c for c in columns if any(k in c.lower() for k in ["amt", "usd", "cents", "mrr", "amount"])), None)
+        if ("sum" in q_lower or "total spend" in q_lower or "total revenue" in q_lower or "total settled" in q_lower) and sum_col:
+            return f"SELECT SUM({sum_col}) AS total_{sum_col} FROM {target_table}{where_stmt};"
 
         select_clause = f"{distinct_str}{col_clause}"
 
@@ -251,6 +346,7 @@ class InitRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     top_k: Optional[int] = 3
+    db_path: Optional[str] = None
 
 @app.get("/health")
 async def health_check():
@@ -285,7 +381,7 @@ async def initialize_database(request: InitRequest):
     Introspects the SQLite database, extracts schemas, enriches business rules,
     and builds the FAISS vector index.
     """
-    global db_initialized, introspected_schemas, rules_cache
+    global db_initialized, introspected_schemas, rules_cache, current_db_path, diagnostic_engine, full_schema_context
 
     # 1. Resolve database path (absolute, relative, or in repo root)
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -315,6 +411,9 @@ async def initialize_database(request: InitRequest):
     try:
         introspector = DatabaseIntrospector(target_path)
         introspected_schemas = introspector.extract_schemas()
+        current_db_path = target_path
+        diagnostic_engine = DiagnosticEngine(introspected_schemas)
+        full_schema_context = "\n\n".join(introspected_schemas.values())
 
         enriched_rules = []
         if request.business_rules:
@@ -346,13 +445,33 @@ async def initialize_database(request: InitRequest):
 @app.post("/generate_sql")
 async def generate_sql(request: QueryRequest):
     """
-    Retrieves schemas from FAISS and generates execution-aligned SQL.
+    Retrieves schemas from FAISS, generates execution-aligned SQL, and runs
+    compiler-guided diagnostic self-healing if execution encounters an error.
     """
+    global db_initialized, introspected_schemas, rules_cache, current_db_path, diagnostic_engine, full_schema_context
+
+    # Auto-initialize if db_path is provided or default enterprise_nexus.sqlite exists
     if not db_initialized:
-        raise HTTPException(
-            status_code=400,
-            detail="Database has not been initialized. Run 'bane init <db_path>' first."
-        )
+        db_to_init = request.db_path
+        if not db_to_init:
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            candidate = os.path.join(repo_root, "enterprise_nexus.sqlite")
+            if os.path.exists(candidate):
+                db_to_init = candidate
+
+        if db_to_init and os.path.exists(db_to_init):
+            introspector = DatabaseIntrospector(db_to_init)
+            introspected_schemas = introspector.extract_schemas()
+            retriever.build_index(introspected_schemas)
+            current_db_path = db_to_init
+            diagnostic_engine = DiagnosticEngine(introspected_schemas)
+            full_schema_context = "\n\n".join(introspected_schemas.values())
+            db_initialized = True
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Database has not been initialized. Run 'bane init <db_path>' first."
+            )
 
     try:
         # 1. Retrieve Schema Context via FAISS RAG
@@ -363,13 +482,54 @@ async def generate_sql(request: QueryRequest):
         if not engine.is_loaded and engine.load_error is None:
             engine.load_model()
 
-        # 3. Generate aligned SQL query
+        # 3. Generate aligned SQL query (zero-shot)
         sql = engine.generate_sql(request.question, schema_context)
+
+        # 4. Dry-run execution & Diagnostic Self-Healing Loop
+        target_db = request.db_path or current_db_path
+        is_repaired = False
+        diagnostic_hint = None
+
+        if target_db and os.path.exists(target_db):
+            try:
+                conn = sqlite3.connect(target_db)
+                cur = conn.cursor()
+                cur.execute(sql)
+                cur.fetchall()
+                conn.close()
+            except Exception as initial_err:
+                err_str = str(initial_err)
+                if diagnostic_engine is None and introspected_schemas:
+                    diagnostic_engine = DiagnosticEngine(introspected_schemas)
+
+                if diagnostic_engine:
+                    diagnostic_hint = diagnostic_engine.diagnose_error(err_str, sql)
+                    repair_context = full_schema_context or schema_context
+                    repaired_sql = engine.repair_sql(
+                        question=request.question,
+                        failed_sql=sql,
+                        error_msg=err_str,
+                        diagnostic_hint=diagnostic_hint,
+                        schema_context=repair_context
+                    )
+
+                    try:
+                        conn = sqlite3.connect(target_db)
+                        cur = conn.cursor()
+                        cur.execute(repaired_sql)
+                        cur.fetchall()
+                        conn.close()
+                        sql = repaired_sql
+                        is_repaired = True
+                    except Exception:
+                        sql = repaired_sql
 
         return {
             "question": request.question,
             "context_used": schema_context,
             "sql": sql,
+            "self_healed": is_repaired,
+            "repair_diagnostic": diagnostic_hint if is_repaired else None,
             "model_loaded": engine.is_loaded
         }
     except Exception as e:
