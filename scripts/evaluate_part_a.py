@@ -4,8 +4,8 @@ import json
 import os
 import time
 
-API_URL = "http://127.0.0.1:8000"
-DB_PATH = "enterprise_nexus.sqlite"
+API_URL = os.environ.get("BANE_API_URL", "http://127.0.0.1:8000").rstrip("/")
+DB_PATH = os.environ.get("BANE_DB_PATH", "enterprise_nexus.sqlite")
 
 test_suite_part_a = [
     {
