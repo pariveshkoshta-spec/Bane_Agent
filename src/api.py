@@ -196,23 +196,30 @@ class ModelEngine:
 
         where_stmt = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        # 5. Handle LIMIT / Sorting
-        # If user explicitly asked for 'all' or 'every', do NOT limit the result set!
+        # 5. Handle DISTINCT, Aggregations, LIMIT, and Sorting
         explicit_all = any(word in q_lower.split() for word in ["all", "every", "entire", "total"])
+        is_distinct = "unique" in q_lower or "distinct" in q_lower
+        distinct_str = "DISTINCT " if is_distinct else ""
 
         if "count" in q_lower or "how many" in q_lower:
+            if is_distinct and selected_cols:
+                return f"SELECT COUNT(DISTINCT {selected_cols[0]}) AS unique_count FROM {target_table}{where_stmt};"
+            elif is_distinct and columns:
+                return f"SELECT COUNT(DISTINCT {columns[0]}) AS unique_count FROM {target_table}{where_stmt};"
             return f"SELECT COUNT(*) AS total_count FROM {target_table}{where_stmt};"
+
+        select_clause = f"{distinct_str}{col_clause}"
 
         limit_match = re.search(r"top\s+(\d+)", q_lower)
         if limit_match:
             limit_n = limit_match.group(1)
-            return f"SELECT {col_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT {limit_n};"
+            return f"SELECT {select_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT {limit_n};"
         elif "top" in q_lower or "highest" in q_lower or "most" in q_lower:
-            return f"SELECT {col_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT 5;"
-        elif explicit_all:
-            return f"SELECT {col_clause} FROM {target_table}{where_stmt};"
+            return f"SELECT {select_clause} FROM {target_table}{where_stmt} ORDER BY 1 DESC LIMIT 5;"
+        elif explicit_all or is_distinct:
+            return f"SELECT {select_clause} FROM {target_table}{where_stmt};"
         else:
-            return f"SELECT {col_clause} FROM {target_table}{where_stmt} LIMIT 20;"
+            return f"SELECT {select_clause} FROM {target_table}{where_stmt} LIMIT 20;"
 
 engine = ModelEngine(ADAPTER_PATH)
 
