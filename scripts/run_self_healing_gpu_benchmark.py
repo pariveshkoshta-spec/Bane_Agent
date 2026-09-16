@@ -5,20 +5,15 @@ import json
 import sqlite3
 import re
 
-def clean_sql(raw_output: str, prompt_prefix: str) -> str:
-    cleaned = raw_output.replace(prompt_prefix, "").strip()
-    if "```sql" in cleaned:
-        cleaned = cleaned.split("```sql")[1].split("```")[0].strip()
-    elif "```" in cleaned:
-        cleaned = cleaned.split("```")[1].split("```")[0].strip()
-    # Take query up to the first terminating semicolon if trailing text exists
-    if ";" in cleaned:
-        cleaned = cleaned.split(";")[0].strip() + ";"
-    return cleaned
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+from src.execution_validator import DiagnosticEngine, clean_sql_output
 
 def run_self_healing_benchmark():
     print("=" * 80)
-    print("  BANE AGENT: FULL-SCHEMA & AGENTIC SELF-HEALING BENCHMARK (GPU)")
+    print("  BANE AGENT: DIAGNOSTIC-AWARE SELF-HEALING BENCHMARK (GPU)")
     print("=" * 80)
 
     try:
@@ -30,8 +25,6 @@ def run_self_healing_benchmark():
     except ImportError:
         print("[ERROR] PyTorch not installed.")
         sys.exit(1)
-
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # 1. Locate Adapters
     adapter_candidates = [
@@ -83,9 +76,10 @@ def run_self_healing_benchmark():
     introspector = DatabaseIntrospector(db_path)
     schemas = introspector.extract_schemas()
 
-    # Concatenate all 10 table definitions for full schema relational awareness
+    # Initialize Compiler Diagnostic Engine with Full Schema Graph
+    diagnostic_engine = DiagnosticEngine(schemas)
     full_schema_context = "\n\n".join(schemas.values())
-    print(f"✅ Loaded Full Relational Schema ({len(schemas)} tables, foreign keys intact).\n")
+    print(f"✅ Diagnostic Engine Initialized with {len(schemas)} Tables and Foreign Key Graph.\n")
 
     # 4. Load 30 Benchmark Questions
     all_questions = []
@@ -113,7 +107,7 @@ def run_self_healing_benchmark():
     repaired_count = 0
     zero_shot_count = 0
 
-    print(f"🚀 Running Full-Schema + Self-Healing Evaluation on {len(all_questions)} Queries...")
+    print(f"🚀 Running Diagnostic-Aware Self-Healing Evaluation on {len(all_questions)} Queries...")
     print("-" * 80)
 
     for item in all_questions:
@@ -121,7 +115,7 @@ def run_self_healing_benchmark():
         q_text = item["question"]
         exp_sql = item["expected_sql"].strip()
 
-        # Step 1: Generate initial query with full schema context
+        # Step 1: Initial Neural Generation
         prompt = format_dpo_prompt(q_text, full_schema_context)
         inputs = tokenizer([prompt], return_tensors="pt")
         if torch.cuda.is_available():
@@ -138,9 +132,9 @@ def run_self_healing_benchmark():
             )
         initial_time = time.time() - t0
         raw_output = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-        gen_sql = clean_sql(raw_output, prompt)
+        gen_sql = clean_sql_output(raw_output, prompt)
 
-        # Step 2: Attempt execution
+        # Step 2: Attempt Execution
         exec_status = "SUCCESS"
         err_str = None
         gen_rows = []
@@ -151,8 +145,10 @@ def run_self_healing_benchmark():
             gen_rows = cursor.fetchall()
             zero_shot_count += 1
         except Exception as initial_err:
-            # Trigger Agentic Self-Correction Loop
+            # Step 3: Trigger Diagnostic-Aware Self-Healing Loop
             err_str = str(initial_err)
+            diagnostic_hint = diagnostic_engine.diagnose_error(err_str, gen_sql)
+
             repair_prompt = f"""### Database Schema:
 {full_schema_context}
 
@@ -165,8 +161,11 @@ def run_self_healing_benchmark():
 ### SQLite Execution Error:
 {err_str}
 
+### Compiler Diagnostic Guidance:
+{diagnostic_hint}
+
 ### Instructions:
-The attempted SQL query produced an execution error. Rewrite and fix the query so that it executes cleanly on SQLite. Return ONLY the valid SQL query.
+Fix the attempted query strictly following the diagnostic guidance and schema above. Return ONLY the corrected, valid SQL query.
 
 ### Corrected SQL:
 """
@@ -183,7 +182,7 @@ The attempted SQL query produced an execution error. Rewrite and fix the query s
                     pad_token_id=tokenizer.eos_token_id
                 )
             repaired_raw = tokenizer.batch_decode(repair_outputs, skip_special_tokens=True)[0]
-            repaired_sql = clean_sql(repaired_raw, repair_prompt)
+            repaired_sql = clean_sql_output(repaired_raw, repair_prompt)
 
             try:
                 cursor.execute(repaired_sql)
@@ -236,22 +235,22 @@ The attempted SQL query produced an execution error. Rewrite and fix the query s
     part_b_pass = sum(1 for r in results if "Part B" in r["type"] and "SUCCESS" in r["status"])
 
     print("\n" + "=" * 80)
-    print("📊 FULL-SCHEMA + AGENTIC SELF-HEALING SCORECARD:")
-    print(f"   • Zero-Shot Clean Passes:   {zero_shot_count}/{total} ({zero_shot_count/total*100:.1f}%)")
-    print(f"   • Self-Healed on Retry:     +{repaired_count} queries auto-repaired!")
-    print(f"   • Total Execution Passes:   {pass_count}/{total} ({pass_count/total*100:.1f}%)")
-    print(f"   • Part A (Technical):       {part_a_pass}/20 ({part_a_pass/20*100:.1f}%)")
-    print(f"   • Part B (Conversational):  {part_b_pass}/10 ({part_b_pass/10*100:.1f}%)")
+    print("📊 DIAGNOSTIC-AWARE SELF-HEALING SCORECARD:")
+    print(f"   • Zero-Shot Direct Hits:   {zero_shot_count}/{total} ({zero_shot_count/total*100:.1f}%)")
+    print(f"   • Rescued by Diagnostics:  +{repaired_count} queries auto-repaired!")
+    print(f"   • Total Execution Passes:  {pass_count}/{total} ({pass_count/total*100:.1f}%)")
+    print(f"   • Part A (Technical):      {part_a_pass}/20 ({part_a_pass/20*100:.1f}%)")
+    print(f"   • Part B (Conversational): {part_b_pass}/10 ({part_b_pass/10*100:.1f}%)")
     print("=" * 80)
 
     # Save output report
     report_path = os.path.join(repo_root, "SELF_HEALING_GPU_REPORT.md")
     report_lines = [
-        "# Agentic Self-Healing GPU Benchmark Report",
+        "# Diagnostic-Aware Agentic GPU Benchmark Report",
         "",
         f"> **Total Pass Rate:** {pass_count}/{total} ({pass_count/total*100:.1f}%)",
         f"> **Zero-Shot Passes:** {zero_shot_count}/{total}",
-        f"> **Queries Rescued by Self-Healing Loop:** +{repaired_count}",
+        f"> **Queries Rescued by Diagnostic Loop:** +{repaired_count}",
         "",
         "| Section | Total | Execution Passes | Success Rate |",
         "| :--- | :---: | :---: | :---: |",
@@ -277,6 +276,12 @@ The attempted SQL query produced an execution error. Rewrite and fix the query s
 
     with open(report_path, "w") as f:
         f.write("\n".join(report_lines))
+
+    # Also save JSON
+    json_path = os.path.join(repo_root, "self_healing_gpu_results.json")
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=2)
+
     print(f"✔ Full report written to: {report_path}")
 
 if __name__ == "__main__":
