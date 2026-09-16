@@ -51,6 +51,20 @@ class ModelEngine:
             return True, "Model already loaded."
 
         if not os.path.exists(self.adapter_path):
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            candidates = [
+                "/content/local_adapters",
+                "/content/bane_dpo_lora_adapters",
+                os.path.join(repo_root, "results", "bane_dpo_lora_adapters"),
+                "/content/drive/MyDrive/bane_dpo_lora_adapters",
+                os.path.join(repo_root, "bane_dpo_lora_adapters")
+            ]
+            for cand in candidates:
+                if os.path.exists(cand) and os.path.exists(os.path.join(cand, "adapter_config.json")):
+                    self.adapter_path = cand
+                    break
+
+        if not os.path.exists(self.adapter_path):
             self.load_error = f"Adapter directory not found at {self.adapter_path}"
             print(f"[WARN] {self.load_error}")
             return False, self.load_error
@@ -347,6 +361,16 @@ class QueryRequest(BaseModel):
     question: str
     top_k: Optional[int] = 3
     db_path: Optional[str] = None
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        import torch
+        if torch.cuda.is_available() or os.environ.get("BANE_AUTO_LOAD_MODEL") == "1":
+            print("[INFO] GPU environment detected. Auto-loading fine-tuned model...")
+            engine.load_model()
+    except Exception as e:
+        print(f"[INFO] Startup model loading skipped: {e}")
 
 @app.get("/health")
 async def health_check():
